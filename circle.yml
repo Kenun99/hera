@@ -1,0 +1,347 @@
+defaults:
+
+  update-submodules: &update-submodules
+    run:
+      name: "Update git submodules"
+      command: |
+        git submodule update --init
+
+  environment-info: &environment-info
+    run:
+      name: "Environment info"
+      command: |
+        echo CXX: $CXX
+        echo Generator: $GENERATOR
+        echo CMake options: $CMAKE_OPTIONS
+        $CXX --version
+        $CXX --version >> toolchain
+        echo $GENERATOR >> toolchain
+
+  configure: &configure
+    run:
+      name: "Configure"
+      # Build "out-of-source" to have better coverage report
+      # (ninja is using relative paths otherwise).
+      working_directory: ~/build
+      command: |
+        cmake ../project -G "$GENERATOR" -DCMAKE_BUILD_TYPE=$BUILD_TYPE $CMAKE_OPTIONS -DEVM2WASM_TOOLS=OFF
+
+  codespell: &codespell
+    run:
+      name: "Run codespell"
+      command: |
+        sudo pip3 install --upgrade pip setuptools
+        sudo pip3 install codespell
+        codespell --skip=".git"
+
+  build: &build
+    run:
+      name: "Build"
+      working_directory: ~/build
+      command: |
+        cmake --build . --target package -- -j $BUILD_PARALLEL_JOBS
+        mkdir -p ~/package
+        . hera/buildinfo.sh
+        mv hera.tar.gz ~/package/$PROJECT_NAME-$PROJECT_VERSION-$SYSTEM_NAME-$SYSTEM_PROCESSOR.tar.gz
+
+  store-package: &store-package
+    store_artifacts:
+      path: ~/package
+      destination: package
+
+  add-package-to-workspace: &add-package-to-workspace
+      persist_to_workspace:
+        root: ~/package
+        paths:
+          - "*"
+
+  save-deps-cache: &save-deps-cache
+    cache-save:
+      name: "Save dependencies cache"
+      key: &deps-cache-key deps-4-{{arch}}-{{checksum "toolchain"}}-{{checksum "cmake/ProjectBinaryen.cmake"}}
+      paths:
+        - ~/build/deps
+
+  restore-deps-cache: &restore-deps-cache
+    cache-restore:
+      name: "Restore dependencies cache"
+      key: *deps-cache-key
+
+  save-aleth-cache: &save-aleth-cache
+    save_cache:
+      key: &aleth-cache-key aleth-prebuilt-cache-{{arch}}-{{checksum "toolchain"}}-v1.5.0-alpha.5
+      paths:
+        - ~/build
+        - ~/.hunter
+
+  restore-aleth-cache: &restore-aleth-cache
+    restore_cache:
+      key: *aleth-cache-key
+
+  checkout-aleth: &checkout-aleth
+    run:
+      name: "Checkout aleth repo"
+      working_directory: ~/
+      command: |
+        git clone https://github.com/ethereum/aleth --branch v1.5.0-alpha.5 --single-branch --recurse-submodules --depth 1
+
+  link-hera: &link-hera
+    run:
+      name: "Link hera to prebuilt aleth"
+      working_directory: ~/project
+      # TODO: run cmake in hera dir with config flags -DHERA_DEBUGGING=ON
+      command: |
+        cd ..
+        echo "pwd: $(pwd)"
+        echo "listing files: $(ls -al)"
+        rm -rf ~/aleth/hera
+        ln -s ~/project ~/aleth/hera
+
+  build-aleth: &build-aleth
+    run:
+      name: "Build aleth with linked Hera"
+      working_directory: ~/project
+      # export PATH is an alternative to `make install`
+      command: |
+        cd ..
+        mkdir -p build && cd build
+        cmake ../aleth -DCMAKE_BUILD_TYPE=RelWithDebInfo -DHERA=ON
+        cmake --build . -- -j $BUILD_PARALLEL_JOBS
+        echo "build finished."
+        echo 'export PATH=~/build/test:$PATH' >> $BASH_ENV
+        cd ../aleth
+        echo "aleth branch: $(git rev-parse --abbrev-ref HEAD)  commit: $(git rev-parse HEAD)"
+        cd hera
+        echo "hera branch: $(git rev-parse --abbrev-ref HEAD)  commit: $(git rev-parse HEAD)"
+
+  install-aleth: &install-aleth
+    run:
+      name: "Install aleth"
+      command: |
+        URL=https://github.com/ethereum/aleth/releases/download/v1.5.0-alpha.5/aleth-1.5.0-alpha.5-linux-x86_64.tar.gz
+        curl -L $URL | sudo tar xz -C /usr/local
+
+  fetch-tests: &fetch-tests
+    run:
+      name: "Fetch eWASM tests"
+      command: |
+        git clone https://github.com/ewasm/tests -b wasm-tests --single-branch --depth 1
+
+  test: &test
+    run:
+      name: "Test shared Hera"
+      command: |
+        if [[ $PRELOAD_ASAN ]]; then export LD_PRELOAD=/usr/lib/clang/6.0/lib/linux/libclang_rt.asan-x86_64.so; fi
+        testeth --version
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --evmc engine=binaryen
+
+  test-wabt: &test-wabt
+    run:
+      name: "Test shared Hera (wabt)"
+      command: |
+        if [[ $PRELOAD_ASAN ]]; then export LD_PRELOAD=/usr/lib/clang/6.0/lib/linux/libclang_rt.asan-x86_64.so; fi
+        testeth --version
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "useGas" --evmc engine=wabt
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "createFromTransaction" --evmc engine=wabt
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "storageStore" --evmc engine=wabt
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "storageLoad" --evmc engine=wabt
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "getCallValue" --evmc engine=wabt
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "getCallDataSize" --evmc engine=wabt
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "callDataCopy" --evmc engine=wabt
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "callDataCopy256" --evmc engine=wabt
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "getGasLeft" --evmc engine=wabt
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "getGasLeftUseAllGas" --evmc engine=wabt
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "returnPredefinedData" --evmc engine=wabt
+
+  test-wavm: &test-wavm
+    run:
+      name: "Test shared Hera (wavm)"
+      command: |
+        if [[ $PRELOAD_ASAN ]]; then export LD_PRELOAD=/usr/lib/clang/6.0/lib/linux/libclang_rt.asan-x86_64.so; fi
+        testeth --version
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "useGas" --evmc engine=wavm
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "createFromTransaction" --evmc engine=wavm
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "storageStore" --evmc engine=wavm
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "storageLoad" --evmc engine=wavm
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "getCallDataSize" --evmc engine=wavm
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "callDataCopy" --evmc engine=wavm
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "callDataCopy256" --evmc engine=wavm
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "getGasLeft" --evmc engine=wavm
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "getGasLeftUseAllGas" --evmc engine=wavm
+        testeth -t GeneralStateTests/stEWASMTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "returnPredefinedData" --evmc engine=wavm
+
+  evmc-test: &evmc-test
+    run:
+      name: "Run evmc tests"
+      command: |
+        ~/build/evmc/test/evmc-vmtester ~/build/src/libhera.so
+
+  evm2wasm-test: &evm2wasm-test
+    run:
+      name: "Run evm2wasm state tests"
+      command: |
+        if [[ $PRELOAD_ASAN ]]; then export LD_PRELOAD=/usr/lib/clang/6.0/lib/linux/libclang_rt.asan-x86_64.so; fi
+        testeth --version
+        testeth -t GeneralStateTests/stExample -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --singletest "add11" --evmc evm1mode=evm2wasm.cpp
+        testeth -t GeneralStateTests/stStackTests -- --testpath tests --vm ~/build/src/libhera.so --singlenet Byzantium --evmc evm1mode=evm2wasm.cpp
+
+  upload-coverage-data: &upload-coverage-data
+    run:
+      name: "Upload coverage data"
+      command: |
+        codecov --required --gcov-root ~/build --gcov-exec gcov-6
+
+
+version: 2
+jobs:
+  linux-clang-shared-release: &linux-clang-shared
+    environment:
+      BUILD_TYPE: Release
+      CXX: clang++
+      CC:  clang
+      GENERATOR: Ninja
+      BUILD_PARALLEL_JOBS: 4
+      CMAKE_OPTIONS: -DBUILD_SHARED_LIBS=ON -DHERA_DEBUGGING=OFF -DHERA_WAVM=ON -DHERA_WABT=ON -DEVMC_TESTING=ON
+    docker:
+      - image: ethereum/cpp-build-env:5
+    steps:
+      - checkout
+      - *update-submodules
+      - *environment-info
+      - *restore-deps-cache
+      - *configure
+      - *build
+      - *store-package
+      - *save-deps-cache
+      - *install-aleth
+      - *add-package-to-workspace
+      - *fetch-tests
+      - *test
+      - *test-wabt
+      - *test-wavm
+      - *evmc-test
+      - *evm2wasm-test
+
+  linux-clang-shared-asan:
+    environment:
+      BUILD_TYPE: Release
+      CXX: clang++
+      CC:  clang
+      GENERATOR: Ninja
+      BUILD_PARALLEL_JOBS: 4
+      CMAKE_OPTIONS: -DBUILD_SHARED_LIBS=ON -DHERA_DEBUGGING=OFF -DHERA_WAVM=ON -DHERA_WABT=ON -DEVMC_TESTING=ON -DSANITIZE=address
+      # The ASan must the first loaded shared library. Force preloading it with this flag.
+      PRELOAD_ASAN: true
+      ASAN_OPTIONS: detect_leaks=0
+    docker:
+      - image: ethereum/cpp-build-env:5
+    steps:
+      - checkout
+      - *update-submodules
+      - *environment-info
+      - *restore-deps-cache
+      - *configure
+      - *build
+      - *store-package
+      - *save-deps-cache
+      - *install-aleth
+      - *fetch-tests
+      - *test
+      - *test-wabt
+      - *test-wavm
+      - *evmc-test
+      - *evm2wasm-test
+
+  linux-gcc-shared-coverage:
+    environment:
+      - BUILD_TYPE: Debug
+      - CXX: g++
+      - CC:  gcc
+      - GENERATOR: Ninja
+      - BUILD_PARALLEL_JOBS: 4
+      - CMAKE_OPTIONS: -DCOVERAGE=ON -DBUILD_SHARED_LIBS=ON -DHERA_DEBUGGING=ON
+    docker:
+      - image: ethereum/cpp-build-env:5
+    steps:
+      - checkout
+      - *update-submodules
+      - *environment-info
+      - *restore-deps-cache
+      - *configure
+      - *build
+      - *store-package
+      - *save-deps-cache
+      - *install-aleth
+      - *fetch-tests
+      - *test
+      - *upload-coverage-data
+
+  linux-gcc-static-debug:
+    environment:
+      - BUILD_TYPE: Debug
+      - CXX: g++
+      - CC:  gcc
+      - GENERATOR: Unix Makefiles
+      - BUILD_PARALLEL_JOBS: 4
+      - CMAKE_OPTIONS: -DBUILD_SHARED_LIBS=OFF -DHERA_DEBUGGING=ON -DHERA_WAVM=ON -DHERA_WABT=ON
+    docker:
+      - image: ethereum/cpp-build-env:5
+    steps:
+      - checkout
+      - *update-submodules
+      - *environment-info
+      - *restore-deps-cache
+      - *configure
+      - *build
+      - *store-package
+      - *save-deps-cache
+
+  lint:
+    docker:
+      - image: ethereum/cpp-build-env:5
+    steps:
+      - checkout
+      - *codespell
+
+  # The job collects built packages (available in the workspace) and
+  # uploads them to the GitHub release matching the git tag.
+  deploy:
+    docker:
+      - image: circleci/golang
+    steps:
+      - run:
+          name: "Install ghr"
+          command: |
+            go get -u github.com/kardianos/govendor
+            govendor get github.com/tcnksm/ghr@=v0.12.0
+      - attach_workspace:
+          at: ~/package
+      - run:
+          name: "Create GitHub release"
+          command: |
+            ls -l ~/package
+            prerelease_flag=$([[ $CIRCLE_TAG =~ ^v[0-9\.]+$ ]] || echo '-prerelease')
+            name="Hera ${CIRCLE_TAG:1}"
+            echo $name
+            ghr -u ewasm -r hera -n "$name" $prerelease_flag $CIRCLE_TAG ~/package
+
+workflows:
+  version: 2
+  hera:
+    jobs:
+      - lint
+      - linux-clang-shared-asan
+      - linux-gcc-shared-coverage
+      - linux-gcc-static-debug
+      - linux-clang-shared-release:
+          filters:
+            tags:
+              only: /.*/
+      - deploy:
+          requires:
+            - linux-clang-shared-release
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v[0-9].*/
