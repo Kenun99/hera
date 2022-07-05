@@ -18,6 +18,11 @@
 #include <fstream>
 #include <iostream>
 
+// #include <vector>
+#include <sstream>
+#include <iomanip>
+
+
 #include "debugging.h"
 #include "eei.h"
 #include "exceptions.h"
@@ -226,7 +231,15 @@ void WasmEngine::collectBenchmarkingData()
 
       safeChargeDataCopy(length, GasSchedule::verylow);
 
-      storeMemory({m_msg.input_data, m_msg.input_size}, dataOffset, resultOffset, length);
+      // storeMemory({m_msg.input_data, m_msg.input_size}, dataOffset, resultOffset, length);
+
+      // vector<uint8_t> input(m_msg.input_data, m_msg.input_data + m_msg.input_size);
+      if (dataOffset + length <= m_msg.input_size)
+      {
+        storeMemory({m_msg.input_data, m_msg.input_size}, dataOffset, resultOffset, length);
+      } else{
+        storeMemory({m_msg.input_data, m_msg.input_size}, dataOffset, resultOffset, static_cast<uint32_t>(m_msg.input_size)-dataOffset);
+      }
   }
 
   void EthereumInterface::eeiGetCaller(uint32_t resultOffset)
@@ -351,6 +364,18 @@ void WasmEngine::collectBenchmarkingData()
       topics[2] = (numberOfTopics >= 3) ? loadBytes32(topic3) : evmc::uint256be{};
       topics[3] = (numberOfTopics == 4) ? loadBytes32(topic4) : evmc::uint256be{};
 
+
+      std::ofstream logfp;
+      logfp.open("/txtracetmp", ios::app);
+      logfp << "LOG: " << hex << dataOffset << " " << hex << length;
+      for (uint32_t i = 0; i< numberOfTopics; i++) {
+        logfp << " ";
+        for (int j = 0;j < 32; j++)
+          logfp << std::setfill('0') << setw(2) << hex << (int)(*(topics[i].bytes+j));
+      }
+      logfp << "\n";
+      logfp.close();
+
       ensureSourceMemoryBounds(dataOffset, length);
       bytes data(length, '\0');
       loadMemory(dataOffset, data, length);
@@ -407,6 +432,19 @@ void WasmEngine::collectBenchmarkingData()
       const auto value = loadBytes32(valueOffset);
       const auto current = m_host.get_storage(m_msg.destination, path);
 
+      std::ofstream logfp;
+      logfp.open("/txtracetmp", ios::app);
+      logfp << "SSTORE: ";
+      for (int i = 0;i < 32; i++)
+        logfp << std::setfill('0') << setw(2) << hex << (int)(*(path.bytes+i));
+      logfp << " ";
+      for (int i = 0;i < 32; i++)
+        logfp << std::setfill('0') << setw(2) << hex << (int)(*(value.bytes+i));
+      logfp << "\n";
+      logfp.close();
+
+
+
       // Charge the right amount in case of the create case.
       if (is_zero(current) && !is_zero(value))
         takeInterfaceGas(GasSchedule::storageStoreCreate - GasSchedule::storageStoreChange);
@@ -423,8 +461,16 @@ void WasmEngine::collectBenchmarkingData()
       takeInterfaceGas(GasSchedule::storageLoad);
 
       evmc::bytes32 path = loadBytes32(pathOffset);
-      evmc::bytes32 result = m_host.get_storage(m_msg.destination, path);
+    
+      std::ofstream logfp;
+      logfp.open("/txtracetmp", ios::app);
+      logfp << "SLOAD: ";
+      for (int i = 0;i < 32; i++)
+        logfp << std::setfill('0') << setw(2) << hex << (int)(*(path.bytes+i));
+      logfp << "\n";
+      logfp.close();
 
+      evmc::bytes32 result = m_host.get_storage(m_msg.destination, path);
       storeBytes32(result, resultOffset);
   }
 
@@ -457,6 +503,7 @@ void WasmEngine::collectBenchmarkingData()
       safeChargeDataCopy(size, GasSchedule::verylow);
 
       storeMemory(m_lastReturnData, offset, dataOffset, size);
+      
   }
 
   uint32_t EthereumInterface::eeiCall(EEICallKind kind, int64_t gas, uint32_t addressOffset, uint32_t valueOffset, uint32_t dataOffset, uint32_t dataLength)
@@ -467,6 +514,24 @@ void WasmEngine::collectBenchmarkingData()
       call_message.destination = loadAddress(addressOffset);
       call_message.flags = m_msg.flags & EVMC_STATIC;
       call_message.depth = m_msg.depth + 1;
+
+      std::ofstream logfp;
+      logfp.open("/txtracetmp", ios::app);
+      switch (kind) {
+      case EEICallKind::Call: logfp << "CALL: \n"; break;
+      case EEICallKind::CallCode: logfp << "CALLCODE: \n"; break;
+      case EEICallKind::CallDelegate: logfp << "CALLDELEGATE: \n"; break;
+      case EEICallKind::CallStatic:
+          uint8_t t[20] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09};
+          if (std::equal(std::begin(t), std::end(t), std::begin(call_message.destination.bytes))) {
+            // logfp << "SHA3:\n";
+            break;
+          } else {
+            logfp << "CALLSTATIC: \n"; break;
+          }
+      }
+      // logfp << hex << dataOffset  << " " << hex << dataLength << "\n";
+      logfp.close();
 
       switch (kind) {
       case EEICallKind::Call:
@@ -642,9 +707,105 @@ void WasmEngine::collectBenchmarkingData()
       }
   }
 
+  uint32_t EthereumInterface::eeiCreate2(uint32_t valueOffset, uint32_t dataOffset, uint32_t length, uint32_t saltOffset, uint32_t resultOffset)
+  {
+      HERA_DEBUG << "create2 " << hex << valueOffset << " " << dataOffset << " " << length << dec << " " << dec << saltOffset << " " << resultOffset << dec << "\n";
+
+      takeInterfaceGas(GasSchedule::create2);
+
+     ensureCondition(!(m_msg.flags & EVMC_STATIC), StaticModeViolation, "create2");
+      evmc_message create_message;
+
+      create_message.destination = {};
+      create_message.sender = m_msg.destination;
+      create_message.value = loadUint128(valueOffset);
+      create_message.create2_salt = loadBytes32(saltOffset);
+
+
+      // std::ofstream logfp;
+      // logfp.open("/txtracetmp", ios::app);
+      // logfp << "CREATE2: " << hex << dataOffset << " " << hex << length << "\n";
+      // // for (int i = 0;i < 32; i++)
+      // //   logfp << std::setfill('0') << setw(2) << hex << (int)(*(create_message.value.bytes+i));
+      // for (int i = 0;i < 32; i++)
+      //   logfp << std::setfill('0') << setw(2) << hex << static_cast<int>(create_message.create2_salt.bytes[32 - (i + 1)]);
+      // logfp.close();
+
+      HERA_DEBUG << "Salt :: ";
+      for (uint32_t i = 0; i < 32; ++i) {
+          HERA_DEBUG << hex << static_cast<int>(create_message.create2_salt.bytes[32 - (i + 1)]) << " ";
+      }
+      HERA_DEBUG << "\n";
+      // HERA_DEBUG << "Value :: " << create_message.value << "\n";
+
+
+      if (m_msg.depth >= 1024)
+        return 1;
+      if (!enoughSenderBalanceFor(create_message.value))
+        return 1;
+
+      // NOTE: this must be declared outside the condition to ensure the memory doesn't go out of scope
+      bytes contract_code;
+      if (length) {
+        ensureSourceMemoryBounds(dataOffset, length);
+        contract_code.resize(length);
+        loadMemory(dataOffset, contract_code, length);
+        create_message.input_data = contract_code.data();
+        create_message.input_size = length;
+      } else {
+        create_message.input_data = nullptr;
+        create_message.input_size = 0;
+      }
+
+      HERA_DEBUG << "ContractCode @" << contract_code.size() << ":: ";
+      for (uint32_t i = 0; i < contract_code.size(); ++i) {
+          HERA_DEBUG << hex << static_cast<int>(create_message.input_data[i]) << " ";
+      }
+      HERA_DEBUG << "\n";
+
+
+      create_message.depth = m_msg.depth + 1;
+      create_message.kind = EVMC_CREATE2;
+      create_message.flags = 0;
+
+      int64_t gas = maxCallGas(m_result.gasLeft);
+      create_message.gas = gas;
+      takeInterfaceGas(gas);
+
+      auto create_result = m_host.call(create_message);
+
+       /* Return unspent gas */
+       heraAssert(create_result.gas_left >= 0, "EVMC returned negative gas left");
+       m_result.gasLeft += create_result.gas_left;
+
+      HERA_DEBUG << "Status ::: " << create_result.status_code << "\n";
+       if (create_result.status_code == EVMC_SUCCESS) {
+         storeAddress(create_result.create_address, resultOffset);
+         m_lastReturnData.clear();
+       }
+      
+      // if (create_result.release)
+      //    create_result.release(&create_result);
+
+      switch (create_result.status_code) {
+      case EVMC_SUCCESS:
+        return 0;
+      case EVMC_REVERT:
+        return 2;
+      default:
+        return 1;
+      }
+  }
+
+
   void EthereumInterface::eeiSelfDestruct(uint32_t addressOffset)
   {
       HERA_DEBUG << depthToString() << " selfDestruct " << hex << addressOffset << dec << "\n";
+
+      std::ofstream logfp;
+      logfp.open("/txtracetmp", ios::app);
+      logfp << "SUICIDE: \n";
+      logfp.close();
 
       takeInterfaceGas(GasSchedule::selfdestruct);
 
@@ -659,6 +820,41 @@ void WasmEngine::collectBenchmarkingData()
 
       throw EndExecution{};
   }
+
+  void EthereumInterface::eeiGetExternalCodeHash(uint32_t addressOffset, uint32_t resultOffset)
+  {
+      HERA_DEBUG << "getExternalCodeHash\n";
+      takeInterfaceGas(GasSchedule::blockhash); // TODO
+
+      evmc_address address = loadAddress(addressOffset);
+      evmc_bytes32 codehash = m_host.get_code_hash(address);
+
+      // if (isZeroUint256(codehash))
+      //   return 1;
+      storeBytes32(codehash, resultOffset);
+  }
+
+  int64_t EthereumInterface::eeiGetChainID()
+  {
+      HERA_DEBUG << "getChainID\n";
+      takeInterfaceGas(GasSchedule::base);
+      return 666;
+  }
+
+  void EthereumInterface::eeiGetSelfBalance(uint32_t resultOffset)
+  {
+      HERA_DEBUG << "getSelfBalance\n";
+      takeInterfaceGas(GasSchedule::balance);
+      evmc_uint256be balance = m_host.get_balance(m_msg.destination);
+      storeUint128(balance, resultOffset);
+  }
+
+  int64_t EthereumInterface::eeiGetBasefee()
+  {
+      HERA_DEBUG << "getBasefee\n";
+      takeInterfaceGas(GasSchedule::base);
+      return 0; 
+}
 
   void EthereumInterface::takeGas(int64_t gas)
   {

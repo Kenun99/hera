@@ -164,6 +164,11 @@ protected:
   uint32_t eeiCall(EEICallKind kind, int64_t gas, uint32_t addressOffset, uint32_t valueOffset, uint32_t dataOffset, uint32_t dataLength);
   uint32_t eeiCreate(uint32_t valueOffset, uint32_t dataOffset, uint32_t length, uint32_t resultOffset);
   void eeiSelfDestruct(uint32_t addressOffset);
+  void eeiGetExternalCodeHash(uint32_t addressOffset, uint32_t resultOffset);
+  int64_t eeiGetChainID();
+  void eeiGetSelfBalance(uint32_t resultOffset);
+  int64_t eeiGetBasefee();
+  uint32_t eeiCreate2(uint32_t valueOffset, uint32_t dataOffset, uint32_t length, uint32_t saltOffset, uint32_t resultOffset);
 
 private:
   void eeiRevertOrFinish(bool revert, uint32_t offset, uint32_t size);
@@ -218,6 +223,7 @@ struct GasSchedule {
   static constexpr unsigned logData = 8;
   static constexpr unsigned logTopic = 375;
   static constexpr unsigned create = 32000;
+  static constexpr unsigned create2 = 32000;
   static constexpr unsigned call = 700;
   static constexpr unsigned copy = 3;
   static constexpr unsigned blockhash = 800;

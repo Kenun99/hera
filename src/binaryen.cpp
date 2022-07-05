@@ -467,6 +467,47 @@ private:
       eeiSelfDestruct(addressOffset);
     }
 
+    if (import->base == wasm::Name("getExternalCodeHash")) {
+      heraAssert(arguments.size() == 2, string("Argument count mismatch in: ") + import->base.str);
+
+      uint32_t addressOffset = static_cast<uint32_t>(arguments[0].geti32());
+      uint32_t resultOffset  = static_cast<uint32_t>(arguments[1].geti32());
+
+      eeiGetExternalCodeHash(addressOffset, resultOffset);
+    }
+
+
+    if (import->base == wasm::Name("getChainID")) {
+      heraAssert(arguments.size() == 0, string("Argument count mismatch in: ") + import->base.str);
+      return wasm::Literal(eeiGetChainID());
+    }
+
+    if (import->base == wasm::Name("getSelfBalance")) {
+      heraAssert(arguments.size() == 1, string("Argument count mismatch in: ") + import->base.str);
+      uint32_t resultOffset = static_cast<uint32_t>(arguments[1].geti32());
+
+      eeiGetSelfBalance(resultOffset);
+      return wasm::Literal();
+    }
+
+    if (import->base == wasm::Name("getBasefee")) {
+      heraAssert(arguments.size() == 0, string("Argument count mismatch in: ") + import->base.str);
+      return wasm::Literal(eeiGetBasefee());
+    }
+
+    if (import->base == wasm::Name("create2")) {
+      heraAssert(arguments.size() == 5, string("Argument count mismatch in: ") + import->base.str);
+
+      uint32_t valueOffset = static_cast<uint32_t>(arguments[0].geti32());
+      uint32_t dataOffset = static_cast<uint32_t>(arguments[1].geti32());
+      uint32_t length = static_cast<uint32_t>(arguments[2].geti32());
+      uint32_t saltOffset = static_cast<uint32_t>(arguments[3].geti32());
+      uint32_t resultOffset = static_cast<uint32_t>(arguments[4].geti32());
+
+      return wasm::Literal(eeiCreate2(valueOffset, dataOffset, length, saltOffset, resultOffset));
+    }
+
+
     heraAssert(false, string("Unsupported import called: ") + import->module.str + "::" + import->base.str + " (" + to_string(arguments.size()) + "arguments)");
   }
 
@@ -632,7 +673,12 @@ void BinaryenEngine::verifyContract(wasm::Module & module)
     { wasm::Name("callDelegate"), createFunctionType({ wasm::Type::i64, wasm::Type::i32, wasm::Type::i32, wasm::Type::i32 }, wasm::Type::i32) },
     { wasm::Name("callStatic"), createFunctionType({ wasm::Type::i64, wasm::Type::i32, wasm::Type::i32, wasm::Type::i32 }, wasm::Type::i32) },
     { wasm::Name("create"), createFunctionType({ wasm::Type::i32, wasm::Type::i32, wasm::Type::i32, wasm::Type::i32 }, wasm::Type::i32) },
-    { wasm::Name("selfDestruct"), createFunctionType({ wasm::Type::i32 }, wasm::Type::none) }
+    { wasm::Name("selfDestruct"), createFunctionType({ wasm::Type::i32 }, wasm::Type::none) },
+    { wasm::Name("create2"), createFunctionType({ wasm::Type::i32, wasm::Type::i32, wasm::Type::i32, wasm::Type::i32, wasm::Type::i32 },wasm::Type::i32) },
+    { wasm::Name("getExternalCodeHash"), createFunctionType({ wasm::Type::i32, wasm::Type::i32}, wasm::Type::none) },
+    { wasm::Name("getChainID"), createFunctionType({}, wasm::Type::i64) },
+    { wasm::Name("getSelfBalance"), createFunctionType({ wasm::Type::i32}, wasm::Type::none) },
+    { wasm::Name("getBasefee"), createFunctionType({}, wasm::Type::i64) }
   };
 
   for (auto const& import: module.imports) {

@@ -287,7 +287,7 @@ evmc_result hera_execute(
   memset(&ret, 0, sizeof(evmc_result));
 
   try {
-    heraAssert(rev == EVMC_BYZANTIUM, "Only Byzantium supported.");
+    heraAssert(true || rev == EVMC_BYZANTIUM, "Only Byzantium supported.");
     heraAssert(msg->gas >= 0, "EVMC supplied negative startgas");
 
     bool meterInterfaceGas = true;
