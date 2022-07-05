@@ -1,6 +1,6 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.5)
 
-if(NOT EXISTS ${CMAKE_SOURCE_DIR}/evmc/.git OR NOT EXISTS ${CMAKE_SOURCE_DIR}/cmake/cable/.git)
+if (NOT EXISTS ${CMAKE_SOURCE_DIR}/evmc/.git OR NOT EXISTS ${CMAKE_SOURCE_DIR}/cmake/cable/.git)
     message(FATAL_ERROR "Git submodules not initialized, execute:\n  git submodule update --init")
 endif()
 
@@ -12,16 +12,23 @@ include(CableToolchains)
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
-include(Hunter/init)
-
-cable_configure_toolchain(DEFAULT cxx17-pic)
-
-cable_set_build_type(DEFAULT RelWithDebInfo CONFIGURATION_TYPES Debug;Release;RelWithDebInfo)
+cable_configure_toolchain(DEFAULT cxx11-pic)
 
 set(CMAKE_DEBUG_POSTFIX "")
+set(HUNTER_CONFIGURATION_TYPES Release CACHE STRING "Build type of the 3rd party packages")
+
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/evm2wasm/cmake/HunterGate.cmake)
+    include(evm2wasm/cmake/HunterGate.cmake)
+    HunterGate(
+        URL "https://github.com/ruslo/hunter/archive/v0.21.19.tar.gz"
+        SHA1 "5ead1e069b437930d0de8a21824b20fb52b37b50"
+    )
+endif()
 
 project(hera)
-set(PROJECT_VERSION 0.3.2)
+set(PROJECT_VERSION 0.2.0)
+
+cable_set_build_type(DEFAULT RelWithDebInfo CONFIGURATION_TYPES Debug;Release;RelWithDebInfo)
 
 cable_configure_compiler()
 if(CABLE_COMPILER_GNULIKE)
@@ -29,26 +36,13 @@ if(CABLE_COMPILER_GNULIKE)
     add_compile_options(-Wno-pedantic)
 endif()
 
+include(ProjectBinaryen)
 
-cable_add_buildinfo_library(PROJECT_NAME hera EXPORT heraTargets)
+cable_add_buildinfo_library(PROJECT_NAME hera)
 
 option(BUILD_SHARED_LIBS "Build libraries as shared" ON)
 
-if(CABLE_COMPILER_CLANG)
-    option(HERA_FUZZING "Build Hera fuzzer" OFF)
-endif()
-if(HERA_FUZZING)
-    set(fuzzer_flags -fsanitize=fuzzer,undefined,address)
-    add_compile_options(${fuzzer_flags})
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${fuzzer_flags}")
-endif()
-
-option(HERA_BINARYEN "Build with binaryen" OFF)
-if (HERA_BINARYEN)
-    include(ProjectBinaryen)
-endif()
-
-option(HERA_WABT "Build with wabt" ON)
+option(HERA_WABT "Build with wabt" OFF)
 if (HERA_WABT)
     include(ProjectWabt)
 endif()
@@ -58,13 +52,9 @@ if (HERA_WAVM)
     include(ProjectWAVM)
 endif()
 
-if (NOT (HERA_BINARYEN OR HERA_WABT OR HERA_WAVM))
-    message(FATAL_ERROR "At least one one engine must be enabled.")
-endif()
-
 add_subdirectory(evmc)
+add_subdirectory(evm2wasm)
 add_subdirectory(src)
-add_subdirectory(test)
 
 
 install(DIRECTORY include/hera DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
@@ -77,11 +67,14 @@ configure_package_config_file(
     INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hera
 )
 
-install(
-    EXPORT heraTargets
-    NAMESPACE hera::
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hera
-)
+if(BUILD_SHARED_LIBS)
+    # TODO: To enable for static libs, hera-buildinfo library must be modified in Cable.
+    install(
+        EXPORT heraTargets
+        NAMESPACE hera::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hera
+    )
+endif()
 
 install(
     FILES

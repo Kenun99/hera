@@ -14,13 +14,15 @@
  * limitations under the License.
  */
 
+#include <vector>
 #include <iostream>
 
-#include "src/interp/binary-reader-interp.h"
+#include "src/binary-reader-interp.h"
 #include "src/binary-reader.h"
 #include "src/cast.h"
+#include "src/error-handler.h"
 #include "src/feature.h"
-#include "src/interp/interp.h"
+#include "src/interp.h"
 #include "src/literal.h"
 #include "src/option-parser.h"
 #include "src/resolve-names.h"
@@ -35,15 +37,14 @@
 #include "exceptions.h"
 
 using namespace std;
-using namespace wabt;
 
 namespace hera {
 
-class WabtEthereumInterface : public EthereumInterface {
+class WabtEthereumInterface : EthereumInterface, public wabt::interp::HostImportDelegate {
 public:
   explicit WabtEthereumInterface(
-    evmc::HostContext& _context,
-    bytes_view _code,
+    evmc_context* _context,
+    vector<uint8_t> const& _code,
     evmc_message const& _msg,
     ExecutionResult & _result,
     bool _meterGas
@@ -52,21 +53,133 @@ public:
   {}
 
   // TODO: improve this design...
-  void setWasmMemory(interp::Memory* _wasmMemory) {
+  void setWasmMemory(wabt::interp::Memory* _wasmMemory) {
     m_wasmMemory = _wasmMemory;
   }
+
+protected:
+  wabt::Result ImportFunc(
+    wabt::interp::FuncImport* import,
+    wabt::interp::Func* func,
+    wabt::interp::FuncSignature* func_sig,
+    const ErrorCallback& callback
+  ) override;
+
+  wabt::Result ImportMemory(
+    wabt::interp::MemoryImport* import,
+    wabt::interp::Memory* mem,
+    const ErrorCallback& callback
+  ) override;
+
+  wabt::Result ImportGlobal(
+    wabt::interp::GlobalImport* import,
+    wabt::interp::Global* global,
+    const ErrorCallback& callback
+  ) override;
+
+  wabt::Result ImportTable(
+    wabt::interp::TableImport* import,
+    wabt::interp::Table* table,
+    const ErrorCallback& callback
+  ) override;
+
+  static wabt::interp::Result wabtUseGas(
+    const wabt::interp::HostFunc* func,
+    const wabt::interp::FuncSignature* sig,
+    wabt::Index num_args,
+    wabt::interp::TypedValue* args,
+    wabt::Index num_results,
+    wabt::interp::TypedValue* out_results,
+    void* user_data
+  );
+
+  static wabt::interp::Result wabtGetGasLeft(
+    const wabt::interp::HostFunc* func,
+    const wabt::interp::FuncSignature* sig,
+    wabt::Index num_args,
+    wabt::interp::TypedValue* args,
+    wabt::Index num_results,
+    wabt::interp::TypedValue* out_results,
+    void* user_data
+  );
+
+  static wabt::interp::Result wabtStorageStore(
+    const wabt::interp::HostFunc* func,
+    const wabt::interp::FuncSignature* sig,
+    wabt::Index num_args,
+    wabt::interp::TypedValue* args,
+    wabt::Index num_results,
+    wabt::interp::TypedValue* out_results,
+    void* user_data
+  );
+
+  static wabt::interp::Result wabtStorageLoad(
+    const wabt::interp::HostFunc* func,
+    const wabt::interp::FuncSignature* sig,
+    wabt::Index num_args,
+    wabt::interp::TypedValue* args,
+    wabt::Index num_results,
+    wabt::interp::TypedValue* out_results,
+    void* user_data
+  );
+
+  static wabt::interp::Result wabtFinish(
+    const wabt::interp::HostFunc* func,
+    const wabt::interp::FuncSignature* sig,
+    wabt::Index num_args,
+    wabt::interp::TypedValue* args,
+    wabt::Index num_results,
+    wabt::interp::TypedValue* out_results,
+    void* user_data
+  );
+
+  static wabt::interp::Result wabtRevert(
+    const wabt::interp::HostFunc* func,
+    const wabt::interp::FuncSignature* sig,
+    wabt::Index num_args,
+    wabt::interp::TypedValue* args,
+    wabt::Index num_results,
+    wabt::interp::TypedValue* out_results,
+    void* user_data
+  );
+
+  static wabt::interp::Result wabtGetCallDataSize(
+    const wabt::interp::HostFunc* func,
+    const wabt::interp::FuncSignature* sig,
+    wabt::Index num_args,
+    wabt::interp::TypedValue* args,
+    wabt::Index num_results,
+    wabt::interp::TypedValue* out_results,
+    void* user_data
+  );
+
+  static wabt::interp::Result wabtCallDataCopy(
+    const wabt::interp::HostFunc* func,
+    const wabt::interp::FuncSignature* sig,
+    wabt::Index num_args,
+    wabt::interp::TypedValue* args,
+    wabt::Index num_results,
+    wabt::interp::TypedValue* out_results,
+    void* user_data
+  );
+
+  static wabt::interp::Result wabtGetCallValue(
+    const wabt::interp::HostFunc* func,
+    const wabt::interp::FuncSignature* sig,
+    wabt::Index num_args,
+    wabt::interp::TypedValue* args,
+    wabt::Index num_results,
+    wabt::interp::TypedValue* out_results,
+    void* user_data
+  );
 
 private:
   // These assume that m_wasmMemory was set prior to execution.
   size_t memorySize() const override { return m_wasmMemory->data.size(); }
   void memorySet(size_t offset, uint8_t value) override { m_wasmMemory->data[offset] = static_cast<char>(value); }
   uint8_t memoryGet(size_t offset) override { return static_cast<uint8_t>(m_wasmMemory->data[offset]); }
-  uint8_t* memoryPointer(size_t offset, size_t length) override {
-    ensureCondition(memorySize() >= (offset + length), InvalidMemoryAccess, "Memory is shorter than requested segment");
-    return reinterpret_cast<uint8_t*>(&m_wasmMemory->data[offset]);
-  }
 
-  interp::Memory* m_wasmMemory;
+  wabt::interp::Memory* m_wasmMemory;
 };
 
 unique_ptr<WasmEngine> WabtEngine::create()
@@ -74,1225 +187,393 @@ unique_ptr<WasmEngine> WabtEngine::create()
   return unique_ptr<WasmEngine>{new WabtEngine};
 }
 
+wabt::Result WabtEthereumInterface::ImportFunc(
+  wabt::interp::FuncImport* import,
+  wabt::interp::Func* func,
+  wabt::interp::FuncSignature* func_sig,
+  const ErrorCallback& callback
+) {
+  (void)import;
+  (void)func;
+  (void)callback;
+  HERA_DEBUG << "Importing " << import->field_name << "\n";
+  wabt::interp::HostFunc *hostFunc = reinterpret_cast<wabt::interp::HostFunc*>(func);
+  if (import->field_name == "useGas") {
+    if (func_sig->param_types.size() != 1 || func_sig->result_types.size() != 0)
+      return wabt::Result::Error;
+    hostFunc->callback = wabtUseGas;
+    hostFunc->user_data = this;
+    return wabt::Result::Ok;
+  } else if (import->field_name == "getGasLeft") {
+    if (func_sig->param_types.size() != 0 || func_sig->result_types.size() != 1)
+      return wabt::Result::Error;
+    hostFunc->callback = wabtGetGasLeft;
+    hostFunc->user_data = this;
+    return wabt::Result::Ok;
+  } else if (import->field_name == "storageStore") {
+    if (func_sig->param_types.size() != 2 || func_sig->result_types.size() != 0)
+      return wabt::Result::Error;
+    hostFunc->callback = wabtStorageStore;
+    hostFunc->user_data = this;
+    return wabt::Result::Ok;
+  } else if (import->field_name == "storageLoad") {
+    if (func_sig->param_types.size() != 2 || func_sig->result_types.size() != 0)
+      return wabt::Result::Error;
+    hostFunc->callback = wabtStorageLoad;
+    hostFunc->user_data = this;
+    return wabt::Result::Ok;
+  } else if (import->field_name == "finish") {
+    if (func_sig->param_types.size() != 2 || func_sig->result_types.size() != 0)
+      return wabt::Result::Error;
+    hostFunc->callback = wabtFinish;
+    hostFunc->user_data = this;
+    return wabt::Result::Ok;
+  } else if (import->field_name == "revert") {
+    if (func_sig->param_types.size() != 2 || func_sig->result_types.size() != 0)
+      return wabt::Result::Error;
+    hostFunc->callback = wabtRevert;
+    hostFunc->user_data = this;
+    return wabt::Result::Ok;
+  } else if (import->field_name == "getCallDataSize") {
+    if (func_sig->param_types.size() != 0 || func_sig->result_types.size() != 1)
+      return wabt::Result::Error;
+    hostFunc->callback = wabtGetCallDataSize;
+    hostFunc->user_data = this;
+    return wabt::Result::Ok;
+  } else if (import->field_name == "callDataCopy") {
+    if (func_sig->param_types.size() != 3 || func_sig->result_types.size() != 0)
+      return wabt::Result::Error;
+    hostFunc->callback = wabtCallDataCopy;
+    hostFunc->user_data = this;
+    return wabt::Result::Ok;
+  } else if (import->field_name == "getCallValue") {
+    if (func_sig->param_types.size() != 1 || func_sig->result_types.size() != 0)
+      return wabt::Result::Error;
+    hostFunc->callback = wabtGetCallValue;
+    hostFunc->user_data = this;
+    return wabt::Result::Ok;
+  }
+  return wabt::Result::Error;
+}
+
+wabt::Result WabtEthereumInterface::ImportMemory(
+  wabt::interp::MemoryImport* import,
+  wabt::interp::Memory* mem,
+  const ErrorCallback& callback
+) {
+  (void)import;
+  (void)mem;
+  (void)callback;
+  return wabt::Result::Error;
+}
+
+wabt::Result WabtEthereumInterface::ImportGlobal(
+  wabt::interp::GlobalImport* import,
+  wabt::interp::Global* global,
+  const ErrorCallback& callback
+) {
+  (void)import;
+  (void)global;
+  (void)callback;
+  return wabt::Result::Error;
+}
+
+wabt::Result WabtEthereumInterface::ImportTable(
+  wabt::interp::TableImport* import,
+  wabt::interp::Table* table,
+  const ErrorCallback& callback
+) {
+  (void)import;
+  (void)table;
+  (void)callback;
+  return wabt::Result::Error;
+}
+
+wabt::interp::Result WabtEthereumInterface::wabtUseGas(
+  const wabt::interp::HostFunc* func,
+  const wabt::interp::FuncSignature* sig,
+  wabt::Index num_args,
+  wabt::interp::TypedValue* args,
+  wabt::Index num_results,
+  wabt::interp::TypedValue* out_results,
+  void* user_data
+) {
+  (void)func;
+  (void)sig;
+  (void)num_args;
+  (void)num_results;
+  (void)out_results;
+
+  WabtEthereumInterface *interface = reinterpret_cast<WabtEthereumInterface*>(user_data);
+
+  int64_t gas = static_cast<int64_t>(args[0].value.i64);
+
+  // FIXME: handle host trap here
+  interface->eeiUseGas(gas);
+
+  return wabt::interp::Result::Ok;
+}
+
+wabt::interp::Result WabtEthereumInterface::wabtGetGasLeft(
+  const wabt::interp::HostFunc* func,
+  const wabt::interp::FuncSignature* sig,
+  wabt::Index num_args,
+  wabt::interp::TypedValue* args,
+  wabt::Index num_results,
+  wabt::interp::TypedValue* out_results,
+  void* user_data
+) {
+  (void)func;
+  (void)num_results;
+  (void)args;
+  (void)num_args;
+
+  WabtEthereumInterface *interface = reinterpret_cast<WabtEthereumInterface*>(user_data);
+
+  out_results[0].type = sig->result_types[0];
+  out_results[0].value.i64 = static_cast<uint64_t>(interface->eeiGetGasLeft());
+
+  return wabt::interp::Result::Ok;
+}
+
+wabt::interp::Result WabtEthereumInterface::wabtStorageStore(
+  const wabt::interp::HostFunc* func,
+  const wabt::interp::FuncSignature* sig,
+  wabt::Index num_args,
+  wabt::interp::TypedValue* args,
+  wabt::Index num_results,
+  wabt::interp::TypedValue* out_results,
+  void* user_data
+) {
+  (void)func;
+  (void)sig;
+  (void)num_args;
+  (void)num_results;
+  (void)out_results;
+
+  WabtEthereumInterface *interface = reinterpret_cast<WabtEthereumInterface*>(user_data);
+
+  uint32_t pathOffset = args[0].value.i32;
+  uint32_t valueOffset = args[1].value.i32;
+  
+  interface->eeiStorageStore(pathOffset, valueOffset);
+
+  return wabt::interp::Result::Ok;
+}
+
+wabt::interp::Result WabtEthereumInterface::wabtStorageLoad(
+  const wabt::interp::HostFunc* func,
+  const wabt::interp::FuncSignature* sig,
+  wabt::Index num_args,
+  wabt::interp::TypedValue* args,
+  wabt::Index num_results,
+  wabt::interp::TypedValue* out_results,
+  void* user_data
+) {
+  (void)func;
+  (void)sig;
+  (void)num_args;
+  (void)num_results;
+  (void)out_results;
+
+  WabtEthereumInterface *interface = reinterpret_cast<WabtEthereumInterface*>(user_data);
+
+  uint32_t pathOffset = args[0].value.i32;
+  uint32_t valueOffset = args[1].value.i32;
+  
+  interface->eeiStorageLoad(pathOffset, valueOffset);
+
+  return wabt::interp::Result::Ok;
+}
+
+wabt::interp::Result WabtEthereumInterface::wabtFinish(
+  const wabt::interp::HostFunc* func,
+  const wabt::interp::FuncSignature* sig,
+  wabt::Index num_args,
+  wabt::interp::TypedValue* args,
+  wabt::Index num_results,
+  wabt::interp::TypedValue* out_results,
+  void* user_data
+) {
+  (void)func;
+  (void)sig;
+  (void)num_args;
+  (void)num_results;
+  (void)out_results;
+
+  WabtEthereumInterface *interface = reinterpret_cast<WabtEthereumInterface*>(user_data);
+
+  uint32_t offset = args[0].value.i32;
+  uint32_t length = args[1].value.i32;
+
+  // FIXME: handle host trap here
+  interface->eeiFinish(offset, length);
+
+  return wabt::interp::Result::Ok;
+}
+
+wabt::interp::Result WabtEthereumInterface::wabtRevert(
+  const wabt::interp::HostFunc* func,
+  const wabt::interp::FuncSignature* sig,
+  wabt::Index num_args,
+  wabt::interp::TypedValue* args,
+  wabt::Index num_results,
+  wabt::interp::TypedValue* out_results,
+  void* user_data
+) {
+  (void)func;
+  (void)sig;
+  (void)num_args;
+  (void)num_results;
+  (void)out_results;
+
+  WabtEthereumInterface *interface = reinterpret_cast<WabtEthereumInterface*>(user_data);
+
+  uint32_t offset = args[0].value.i32;
+  uint32_t length = args[1].value.i32;
+
+  // FIXME: handle host trap here
+  interface->eeiRevert(offset, length);
+
+  return wabt::interp::Result::Ok;
+}
+
+wabt::interp::Result WabtEthereumInterface::wabtGetCallDataSize(
+  const wabt::interp::HostFunc* func,
+  const wabt::interp::FuncSignature* sig,
+  wabt::Index num_args,
+  wabt::interp::TypedValue* args,
+  wabt::Index num_results,
+  wabt::interp::TypedValue* out_results,
+  void* user_data
+) {
+  (void)func;
+  (void)num_results;
+  (void)args;
+  (void)num_args;
+
+  WabtEthereumInterface *interface = reinterpret_cast<WabtEthereumInterface*>(user_data);
+
+  out_results[0].type = sig->result_types[0];
+  out_results[0].value.i32 = interface->eeiGetCallDataSize();
+
+  return wabt::interp::Result::Ok;
+}
+
+wabt::interp::Result WabtEthereumInterface::wabtCallDataCopy(
+  const wabt::interp::HostFunc* func,
+  const wabt::interp::FuncSignature* sig,
+  wabt::Index num_args,
+  wabt::interp::TypedValue* args,
+  wabt::Index num_results,
+  wabt::interp::TypedValue* out_results,
+  void* user_data
+) {
+  (void)func;
+  (void)sig;
+  (void)num_args;
+  (void)num_results;
+  (void)out_results;
+
+  WabtEthereumInterface *interface = reinterpret_cast<WabtEthereumInterface*>(user_data);
+
+  uint32_t resultOffset = args[0].value.i32;
+  uint32_t dataOffset = args[1].value.i32;
+  uint32_t length = args[2].value.i32;
+
+  interface->eeiCallDataCopy(resultOffset, dataOffset, length);
+
+  return wabt::interp::Result::Ok;
+}
+
+wabt::interp::Result WabtEthereumInterface::wabtGetCallValue(
+  const wabt::interp::HostFunc* func,
+  const wabt::interp::FuncSignature* sig,
+  wabt::Index num_args,
+  wabt::interp::TypedValue* args,
+  wabt::Index num_results,
+  wabt::interp::TypedValue* out_results,
+  void* user_data
+) {
+  (void)func;
+  (void)sig;
+  (void)num_args;
+  (void)num_results;
+  (void)out_results;
+
+  WabtEthereumInterface *interface = reinterpret_cast<WabtEthereumInterface*>(user_data);
+
+  uint32_t resultOffset = args[0].value.i32;
+  
+  interface->eeiGetCallValue(resultOffset);
+
+  return wabt::interp::Result::Ok;
+}
+
 ExecutionResult WabtEngine::execute(
-  evmc::HostContext& context,
-  bytes_view code,
-  bytes_view state_code,
+  evmc_context* context,
+  vector<uint8_t> const& code,
+  vector<uint8_t> const& state_code,
   evmc_message const& msg,
   bool meterInterfaceGas
 ) {
-  instantiationStarted();
   HERA_DEBUG << "Executing with wabt...\n";
 
-  // Set up the wabt Environment, which includes the Wasm store
-  // and the list of modules used for importing/exporting between modules
-  interp::Environment env;
+  // This is the wasm state
+  wabt::interp::Environment env;
 
-  // Set up interface to eei host functions
+  // Lets instantiate our state
   ExecutionResult result;
-  WabtEthereumInterface interface{context, state_code, msg, result, meterInterfaceGas};
 
-  // Create EEI host module
+  // FIXME: shouldn't have this loose pointer here, but needed for setWasmMemory
+  WabtEthereumInterface* interface = new WabtEthereumInterface{context, state_code, msg, result, meterInterfaceGas};
+
+  // Lets add our host module
   // The lifecycle of this pointer is handled by `env`.
-  interp::HostModule* hostModule = env.AppendHostModule("ethereum");
+  wabt::interp::HostModule* hostModule = env.AppendHostModule("ethereum");
   heraAssert(hostModule, "Failed to create host module.");
+  hostModule->import_delegate = unique_ptr<WabtEthereumInterface>(interface);
 
-  hostModule->AppendFuncExport(
-    "useGas",
-    {{Type::I64}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiUseGas(static_cast<int64_t>(args[0].value.i64));
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getAddress",
-    {{Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiGetAddress(args[0].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getExternalBalance",
-    {{Type::I32, Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiGetExternalBalance(args[0].value.i32, args[1].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getBlockHash",
-    {{Type::I64, Type::I32}, {Type::I32}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues& results
-    ) {
-      results[0].set_i32(interface.eeiGetBlockHash(args[0].value.i64, args[1].value.i32));
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "call",
-    {{Type::I64, Type::I32, Type::I32, Type::I32, Type::I32}, {Type::I32}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues& results
-    ) {
-      results[0].set_i32(interface.eeiCall(
-        EthereumInterface::EEICallKind::Call,
-        static_cast<int64_t>(args[0].value.i64), args[1].value.i32,
-        args[2].value.i32, args[3].value.i32, args[4].value.i32
-      ));
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "callDataCopy",
-    {{Type::I32, Type::I32, Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiCallDataCopy(args[0].value.i32, args[1].value.i32, args[2].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getCallDataSize",
-    {{}, {Type::I32}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues& results
-    ) {
-      results[0].set_i32(interface.eeiGetCallDataSize());
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "callCode",
-    {{Type::I64, Type::I32, Type::I32, Type::I32, Type::I32}, {Type::I32}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues& results
-    ) {
-      results[0].set_i32(interface.eeiCall(
-        EthereumInterface::EEICallKind::CallCode,
-        static_cast<int64_t>(args[0].value.i64), args[1].value.i32,
-        args[2].value.i32, args[3].value.i32, args[4].value.i32
-      ));
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "callDelegate",
-    {{Type::I64, Type::I32, Type::I32, Type::I32}, {Type::I32}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues& results
-    ) {
-      results[0].set_i32(interface.eeiCall(
-        EthereumInterface::EEICallKind::CallDelegate,
-        static_cast<int64_t>(args[0].value.i64), args[1].value.i32, 0,
-        args[2].value.i32, args[3].value.i32
-      ));
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "callStatic",
-    {{Type::I64, Type::I32, Type::I32, Type::I32}, {Type::I32}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues& results
-    ) {
-      results[0].set_i32(interface.eeiCall(
-        EthereumInterface::EEICallKind::CallStatic,
-        static_cast<int64_t>(args[0].value.i64), args[1].value.i32, 0,
-        args[2].value.i32, args[3].value.i32
-      ));
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "storageStore",
-    {{Type::I32, Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiStorageStore(args[0].value.i32, args[1].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "storageLoad",
-    {{Type::I32, Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiStorageLoad(args[0].value.i32, args[1].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getCaller",
-    {{Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiGetCaller(args[0].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getCallValue",
-    {{Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiGetCallValue(args[0].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "codeCopy",
-    {{Type::I32, Type::I32, Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiCodeCopy(args[0].value.i32, args[1].value.i32, args[2].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getCodeSize",
-    {{}, {Type::I32}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues& results
-    ) {
-      results[0].set_i32(interface.eeiGetCodeSize());
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getBlockCoinbase",
-    {{Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiGetBlockCoinbase(args[0].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "create",
-    {{Type::I32, Type::I32, Type::I32, Type::I32}, {Type::I32}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues& results
-    ) {
-      results[0].set_i32(interface.eeiCreate(
-        args[0].value.i32, args[1].value.i32,
-        args[2].value.i32, args[3].value.i32
-      ));
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getBlockDifficulty",
-    {{Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiGetBlockDifficulty(args[0].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "externalCodeCopy",
-    {{Type::I32, Type::I32, Type::I32, Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiExternalCodeCopy(
-        args[0].value.i32, args[1].value.i32,
-        args[2].value.i32, args[3].value.i32
-      );
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getExternalCodeSize",
-    {{Type::I32}, {Type::I32}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues& results
-    ) {
-      results[0].set_i32(interface.eeiGetExternalCodeSize(args[0].value.i32));
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getGasLeft",
-    {{}, {Type::I64}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues& results
-    ) {
-      results[0].set_i64(static_cast<uint64_t>(interface.eeiGetGasLeft()));
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getBlockGasLimit",
-    {{}, {Type::I64}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues& results
-    ) {
-      results[0].set_i64(static_cast<uint64_t>(interface.eeiGetBlockGasLimit()));
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getTxGasPrice",
-    {{Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiGetTxGasPrice(args[0].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "log",
-    {{Type::I32, Type::I32, Type::I32, Type::I32, Type::I32, Type::I32, Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiLog(
-        args[0].value.i32, args[1].value.i32, args[2].value.i32, args[3].value.i32,
-        args[4].value.i32, args[5].value.i32, args[6].value.i32
-      );
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getBlockNumber",
-    {{}, {Type::I64}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues& results
-    ) {
-      results[0].set_i64(static_cast<uint64_t>(interface.eeiGetBlockNumber()));
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getTxOrigin",
-    {{Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiGetTxOrigin(args[0].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "finish",
-    {{Type::I32, Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiFinish(args[0].value.i32, args[1].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "revert",
-    {{Type::I32, Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiRevert(args[0].value.i32, args[1].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getReturnDataSize",
-    {{}, {Type::I32}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues& results
-    ) {
-      results[0].set_i32(interface.eeiGetReturnDataSize());
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "returnDataCopy",
-    {{Type::I32, Type::I32, Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiReturnDataCopy(args[0].value.i32, args[1].value.i32, args[2].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "selfDestruct",
-    {{Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.eeiSelfDestruct(args[0].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getBlockTimestamp",
-    {{}, {Type::I64}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues& results
-    ) {
-      results[0].set_i64(static_cast<uint64_t>(interface.eeiGetBlockTimestamp()));
-      return interp::Result::Ok;
-    }
-  );
-
-#if HERA_DEBUGGING
-  // Create debug host module
-  // The lifecycle of this pointer is handled by `env`.
-  hostModule = env.AppendHostModule("debug");
-  heraAssert(hostModule, "Failed to create host module.");
-
-  hostModule->AppendFuncExport(
-    "print32",
-    {{Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.debugPrint32(args[0].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "print64",
-    {{Type::I64}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.debugPrint64(args[0].value.i64);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "printMem",
-    {{Type::I32, Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.debugPrintMem(false, args[0].value.i32, args[1].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "printMemHex",
-    {{Type::I32, Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.debugPrintMem(true, args[0].value.i32, args[1].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "printStorage",
-    {{Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.debugPrintStorage(false, args[0].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "printStorageHex",
-    {{Type::I32}, {}},
-    [&interface](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues& args,
-      interp::TypedValues&
-    ) {
-      interface.debugPrintStorage(true, args[0].value.i32);
-      return interp::Result::Ok;
-    }
-  );
-#endif
-
-  // Parse module
-  ReadBinaryOptions options(
-    Features{},
+  wabt::ReadBinaryOptions options(
+    wabt::Features{},
     nullptr, // debugging stream for loading
     false, // ReadDebugNames
     true, // StopOnFirstError
     true // FailOnCustomSectionError
   );
 
-  Errors errors;
-  interp::DefinedModule* module = nullptr;
-  Result loadResult = ReadBinaryInterp(
+  wabt::ErrorHandlerFile error_handler(wabt::Location::Type::Binary);
+  wabt::interp::DefinedModule* module = nullptr;
+  wabt::ReadBinaryInterp(
     &env,
     code.data(),
     code.size(),
-    options,
-    &errors,
+    &options,
+    &error_handler,
     &module
   );
-
-#if HERA_DEBUGGING
-  for (auto it = errors.begin(); it != errors.end(); ++it) {
-    HERA_DEBUG << "wabt (execute): " << it->message << "\n";
-  }
-#endif
-
-  ensureCondition(Succeeded(loadResult) && module, ContractValidationFailure, "Module failed to load.");
+  ensureCondition(module, ContractValidationFailure, "Module failed to load.");
   ensureCondition(env.GetMemoryCount() == 1, ContractValidationFailure, "Multiple memory sections exported.");
-  ensureCondition(module->GetExport("memory"), ContractValidationFailure, "\"memory\" not found");
-  ensureCondition(module->start_func_index == kInvalidIndex, ContractValidationFailure, "Contract contains start function.");
 
-  // Prepare to execute
-  interp::Export* mainFunction = module->GetExport("main");
+  wabt::interp::Export* mainFunction = module->GetExport("main");
   ensureCondition(mainFunction, ContractValidationFailure, "\"main\" not found");
-  ensureCondition(mainFunction->kind == ExternalKind::Func, ContractValidationFailure,  "\"main\" is not a function");
-  interp::Executor executor(
-    &env,
-    nullptr, // null for no tracing
-    interp::Thread::Options{} // empty for no threads
-  );
+  ensureCondition(mainFunction->kind == wabt::ExternalKind::Func, ContractValidationFailure,  "\"main\" is not a function");
+
+  // No tracing, no threads
+  wabt::interp::Executor executor(&env, nullptr, wabt::interp::Thread::Options{});
 
   // FIXME: really bad design
-  interface.setWasmMemory(env.GetMemory(0));
-
-  executionStarted();
+  interface->setWasmMemory(env.GetMemory(0));
 
   // Execute main
   try {
-    interp::ExecResult wabtResult = executor.RunExport(mainFunction, interp::TypedValues{}); // second arg is empty since no args
-    // Wrap any non-EEI exception under VMTrap.
-    ensureCondition(wabtResult.result == interp::Result::Ok, VMTrap, "The VM invocation had a trap.");
+    wabt::interp::ExecResult wabtResult = executor.RunExport(mainFunction, wabt::interp::TypedValues{});
   } catch (EndExecution const&) {
     // This exception is ignored here because we consider it to be a success.
     // It is only a clutch for POSIX style exit()
   }
 
-  executionFinished();
   return result;
 }
-
-void WabtEngine::verifyContract(bytes_view code) {
-  // Set up the wabt Environment, which includes the Wasm store
-  // and the list of modules used for importing/exporting between modules
-  interp::Environment env;
-
-  // Create EEI host module
-  // The lifecycle of this pointer is handled by `env`.
-  interp::HostModule* hostModule = env.AppendHostModule("ethereum");
-  heraAssert(hostModule, "Failed to create host module.");
-
-  hostModule->AppendFuncExport(
-    "useGas",
-    {{Type::I64}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getAddress",
-    {{Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getExternalBalance",
-    {{Type::I32, Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getBlockHash",
-    {{Type::I64, Type::I32}, {Type::I32}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "call",
-    {{Type::I64, Type::I32, Type::I32, Type::I32, Type::I32}, {Type::I32}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "callDataCopy",
-    {{Type::I32, Type::I32, Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getCallDataSize",
-    {{}, {Type::I32}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "callCode",
-    {{Type::I64, Type::I32, Type::I32, Type::I32, Type::I32}, {Type::I32}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "callDelegate",
-    {{Type::I64, Type::I32, Type::I32, Type::I32}, {Type::I32}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "callStatic",
-    {{Type::I64, Type::I32, Type::I32, Type::I32}, {Type::I32}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "storageStore",
-    {{Type::I32, Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "storageLoad",
-    {{Type::I32, Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getCaller",
-    {{Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getCallValue",
-    {{Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "codeCopy",
-    {{Type::I32, Type::I32, Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getCodeSize",
-    {{}, {Type::I32}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getBlockCoinbase",
-    {{Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "create",
-    {{Type::I32, Type::I32, Type::I32, Type::I32}, {Type::I32}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getBlockDifficulty",
-    {{Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "externalCodeCopy",
-    {{Type::I32, Type::I32, Type::I32, Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getExternalCodeSize",
-    {{Type::I32}, {Type::I32}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getGasLeft",
-    {{}, {Type::I64}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getBlockGasLimit",
-    {{}, {Type::I64}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getTxGasPrice",
-    {{Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "log",
-    {{Type::I32, Type::I32, Type::I32, Type::I32, Type::I32, Type::I32, Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getBlockNumber",
-    {{}, {Type::I64}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getTxOrigin",
-    {{Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "finish",
-    {{Type::I32, Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "revert",
-    {{Type::I32, Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getReturnDataSize",
-    {{}, {Type::I32}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "returnDataCopy",
-    {{Type::I32, Type::I32, Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "selfDestruct",
-    {{Type::I32}, {}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "getBlockTimestamp",
-    {{}, {Type::I64}},
-    [](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-#if HERA_DEBUGGING
-  // Create debug host module
-  // The lifecycle of this pointer is handled by `env`.
-  hostModule = env.AppendHostModule("debug");
-  heraAssert(hostModule, "Failed to create host module.");
-
-  hostModule->AppendFuncExport(
-    "print32",
-    {{Type::I32}, {}},
-    [&](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "print64",
-    {{Type::I64}, {}},
-    [&](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "printMem",
-    {{Type::I32, Type::I32}, {}},
-    [&](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "printMemHex",
-    {{Type::I32, Type::I32}, {}},
-    [&](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "printStorage",
-    {{Type::I32}, {}},
-    [&](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-
-  hostModule->AppendFuncExport(
-    "printStorageHex",
-    {{Type::I32}, {}},
-    [&](
-      const interp::HostFunc*,
-      const interp::FuncSignature*,
-      const interp::TypedValues&,
-      interp::TypedValues&
-    ) {
-      return interp::Result::Ok;
-    }
-  );
-#endif
-
-  // Parse module
-  ReadBinaryOptions options(
-    Features{},
-    nullptr, // debugging stream for loading
-    false, // ReadDebugNames
-    true, // StopOnFirstError
-    true // FailOnCustomSectionError
-  );
-
-  Errors errors;
-  interp::DefinedModule* module = nullptr;
-  Result loadResult = ReadBinaryInterp(
-    &env,
-    code.data(),
-    code.size(),
-    options,
-    &errors,
-    &module
-  );
-
-#if HERA_DEBUGGING
-  for (auto it = errors.begin(); it != errors.end(); ++it) {
-    HERA_DEBUG << "wabt (verifyContract): " << it->message << "\n";
-  }
-#endif
-
-  ensureCondition(Succeeded(loadResult) && module, ContractValidationFailure, "Module failed to load.");
-  ensureCondition(env.GetMemoryCount() == 1, ContractValidationFailure, "Multiple memory sections exported.");
-  ensureCondition(module->GetExport("memory"), ContractValidationFailure, "\"memory\" not found");
-  ensureCondition(module->start_func_index == kInvalidIndex, ContractValidationFailure, "Contract contains start function.");
-
-  interp::Export* mainFunction = module->GetExport("main");
-  ensureCondition(mainFunction, ContractValidationFailure, "\"main\" not found");
-  ensureCondition(mainFunction->kind == ExternalKind::Func, ContractValidationFailure,  "\"main\" is not a function");
-};
 
 }

@@ -16,21 +16,17 @@
 
 #pragma once
 
-#include <chrono>
-#include <cstdint>
-#include <string>
+#include <vector>
 
 #include <evmc/evmc.h>
-#include <evmc/evmc.hpp>
 
 #include "exceptions.h"
-#include "helpers.h"
 
 namespace hera {
 
 struct ExecutionResult {
   int64_t gasLeft = 0;
-  bytes returnValue;
+  std::vector<uint8_t> returnValue;
   bool isRevert = false;
 };
 
@@ -43,56 +39,27 @@ public:
   virtual ~WasmEngine() noexcept = default;
 
   virtual ExecutionResult execute(
-    evmc::HostContext& context,
-    bytes_view code,
-    bytes_view state_code,
+    evmc_context* context,
+    std::vector<uint8_t> const& code,
+    std::vector<uint8_t> const& state_code,
     evmc_message const& msg,
     bool meterInterfaceGas
   ) = 0;
 
-  virtual void verifyContract(bytes_view code) = 0;
-
-  static void enableBenchmarking() noexcept { benchmarkingEnabled = true; }
-
-protected:
-  void instantiationStarted() noexcept
-  {
-    if (benchmarkingEnabled)
-      instantiationStartTime = clock::now();
-  }
-
-  void executionStarted() noexcept
-  {
-    if (benchmarkingEnabled)
-      executionStartTime = clock::now();
-  }
-
-  void executionFinished()
-  {
-    if (benchmarkingEnabled)
-      collectBenchmarkingData();
-  }
-
-private:
-  void collectBenchmarkingData();
-
-  using clock = std::chrono::high_resolution_clock;
-  static bool benchmarkingEnabled;
-  clock::time_point instantiationStartTime;
-  clock::time_point executionStartTime;
+  virtual void verifyContract(std::vector<uint8_t> const& code) = 0;
 };
 
 class EthereumInterface {
 public:
   explicit EthereumInterface(
-    evmc::HostContext& _host,
-    bytes_view _code,
+    evmc_context* _context,
+    std::vector<uint8_t> const& _code,
     evmc_message const& _msg,
-    ExecutionResult& _result,
+    ExecutionResult & _result,
     bool _meterGas
   ):
-    m_host{_host}, // FIXME: Change param to &.
-    m_code{_code},
+    m_context(_context),
+    m_code(_code),
     m_msg(_msg),
     m_result(_result),
     m_meterGas(_meterGas)
@@ -102,20 +69,22 @@ public:
     // set starting gas
     m_result.gasLeft = m_msg.gas;
     // set sane defaults
-    m_result.returnValue = {};
+    m_result.returnValue = std::vector<uint8_t>{};
     m_result.isRevert = false;
+
+    // cache the transaction context here
+    m_tx_context = m_context->host->get_tx_context(m_context);
   }
 
-// WAVM/WABT host functions access this interface through an instance,
+// WAVM host functions access this interface through an instance,
 // which requires public methods.
-// TODO: update upstream WAVM/WABT to have a context (user data) passed down.
-#if HERA_WAVM == 0 && HERA_WABT == 0
+// TODO: update upstream WAVM to have a context (user data) passed down.
+#if HERA_WAVM == 0
 protected:
 #endif
   virtual size_t memorySize() const = 0 ;
   virtual void memorySet(size_t offset, uint8_t value) = 0;
   virtual uint8_t memoryGet(size_t offset) = 0;
-  virtual uint8_t* memoryPointer(size_t offset, size_t length) = 0;
 
   enum class EEICallKind {
     Call,
@@ -127,8 +96,6 @@ protected:
   // EEI methods
 
 #if HERA_DEBUGGING
-  void debugPrint32(uint32_t value);
-  void debugPrint64(uint64_t value);
   void debugPrintMem(bool useHex, uint32_t offset, uint32_t length);
   void debugPrintStorage(bool useHex, uint32_t pathOffset);
   void debugEvmTrace(uint32_t pc, int32_t opcode, uint32_t cost, int32_t sp);
@@ -170,13 +137,16 @@ protected:
   int64_t eeiGetBasefee();
   uint32_t eeiCreate2(uint32_t valueOffset, uint32_t dataOffset, uint32_t length, uint32_t saltOffset, uint32_t resultOffset);
 
+  void eeiGetExternalCodeHash(uint32_t addressOffset, uint32_t resultOffset);
+  int64_t eeiGetChainID();
+  void eeiGetSelfBalance(uint32_t resultOffset);
+  int64_t eeiGetBasefee();
+  uint32_t eeiCreate2(uint32_t valueOffset, uint32_t dataOffset, uint32_t length, uint32_t saltOffset, uint32_t resultOffset);
+
 private:
   void eeiRevertOrFinish(bool revert, uint32_t offset, uint32_t size);
 
   // Helpers methods
-  inline std::string depthToString() const {
-    return "[" + std::to_string(m_msg.depth) + "]";
-  }
 
   void takeGas(int64_t gas);
   void takeInterfaceGas(int64_t gas);
@@ -184,33 +154,43 @@ private:
   void ensureSourceMemoryBounds(uint32_t offset, uint32_t length);
   void loadMemoryReverse(uint32_t srcOffset, uint8_t *dst, size_t length);
   void loadMemory(uint32_t srcOffset, uint8_t *dst, size_t length);
-  void loadMemory(uint32_t srcOffset, bytes& dst, size_t length);
+  void loadMemory(uint32_t srcOffset, std::vector<uint8_t> & dst, size_t length);
   void storeMemoryReverse(const uint8_t *src, uint32_t dstOffset, uint32_t length);
   void storeMemory(const uint8_t *src, uint32_t dstOffset, uint32_t length);
-  void storeMemory(bytes_view src, uint32_t srcOffset, uint32_t dstOffset, uint32_t length);
+  void storeMemory(std::vector<uint8_t> const& src, uint32_t srcOffset, uint32_t dstOffset, uint32_t length);
 
-  evmc::bytes32 loadBytes32(uint32_t srcOffset);
-  void storeBytes32(evmc::bytes32 const& src, uint32_t dstOffset);
-  evmc::uint256be loadUint256(uint32_t srcOffset);
-  void storeUint256(evmc::uint256be const& src, uint32_t dstOffset);
-  evmc::address loadAddress(uint32_t srcOffset);
-  void storeAddress(evmc::address const& src, uint32_t dstOffset);
-  evmc::uint256be loadUint128(uint32_t srcOffset);
-  void storeUint128(evmc::uint256be const& src, uint32_t dstOffset);
+  evmc_uint256be loadBytes32(uint32_t srcOffset);
+  void storeBytes32(evmc_uint256be const& src, uint32_t dstOffset);
+  evmc_uint256be loadUint256(uint32_t srcOffset);
+  void storeUint256(evmc_uint256be const& src, uint32_t dstOffset);
+  evmc_address loadAddress(uint32_t srcOffset);
+  void storeAddress(evmc_address const& src, uint32_t dstOffset);
+  evmc_uint256be loadUint128(uint32_t srcOffset);
+  void storeUint128(evmc_uint256be const& src, uint32_t dstOffset);
 
   inline int64_t maxCallGas(int64_t gas) { return gas - (gas / 64); }
 
   /* Checks for overflow and safely charges gas for variable length data copies */
   void safeChargeDataCopy(uint32_t length, unsigned baseCost);
 
-  bool enoughSenderBalanceFor(evmc::uint256be const& value);
+  bool enoughSenderBalanceFor(evmc_uint256be const& value) const;
 
-  static unsigned __int128 safeLoadUint128(evmc::uint256be const& value);
+  static unsigned __int128 safeLoadUint128(evmc_uint256be const& value);
 
-  evmc::HostContext& m_host;
-  bytes_view m_code;
+  /* Checks if host supplied 256 bit value exceeds UINT128_MAX */
+  static bool exceedsUint128(evmc_uint256be const& value);
+
+  /* Checks if a 128 bit value is all zeroes */
+  static bool isZeroUint128(evmc_uint256be const& value);
+
+  /* Checks if a 256 bit value is all zeroes */
+  static bool isZeroUint256(evmc_uint256be const& value);
+
+  evmc_tx_context m_tx_context{};
+  evmc_context* m_context = nullptr;
+  std::vector<uint8_t> const& m_code;
   evmc_message const& m_msg;
-  bytes m_lastReturnData;
+  std::vector<uint8_t> m_lastReturnData;
   ExecutionResult & m_result;
   bool m_meterGas = true;
 };

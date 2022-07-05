@@ -30,21 +30,21 @@ public:
   static std::unique_ptr<WasmEngine> create();
 
   ExecutionResult execute(
-    evmc::HostContext& context,
-    bytes_view code,
-    bytes_view state_code,
+    evmc_context* context,
+    std::vector<uint8_t> const& code,
+    std::vector<uint8_t> const& state_code,
     evmc_message const& msg,
     bool meterInterfaceGas
   ) override;
 
-  void verifyContract(bytes_view code) override;
+  void verifyContract(std::vector<uint8_t> const& code) override;
 
 private:
-  void verifyContract(wasm::Module& module);
+  void verifyContract(wasm::Module & module);
 
   /// Parses and loads a Wasm module.
   /// Don't ask, Module has no copy constructor, hence the reference.
-  void loadModule(bytes_view code, wasm::Module& module);
+  void loadModule(std::vector<uint8_t> const& code, wasm::Module & module);
 };
 
 }

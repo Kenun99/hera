@@ -26,14 +26,16 @@ public:
   static std::unique_ptr<WasmEngine> create();
 
   ExecutionResult execute(
-    evmc::HostContext& context,
-    bytes_view code,
-    bytes_view state_code,
+    evmc_context* context,
+    std::vector<uint8_t> const& code,
+    std::vector<uint8_t> const& state_code,
     evmc_message const& msg,
     bool meterInterfaceGas
   ) override;
 
-  void verifyContract(bytes_view code) override;
+  void verifyContract(std::vector<uint8_t> const&) override {
+    // TODO: implement
+  }
 };
 
 }
