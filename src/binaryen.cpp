@@ -548,6 +548,22 @@ ExecutionResult BinaryenEngine::execute(
     // This exception is ignored here because we consider it to be a success.
     // It is only a clutch for POSIX style exit()
   }
+  
+  // export the bitmap
+  try {
+    // wasm::Name entry = wasm::Name("export_bitmap");
+    //  wasm::Literal bitmap;
+    //  bitmap = instance.getExport(entry);
+    //  uint8_t dst[16];
+    //  bitmap.getBits(dst);
+    //  for (int i = 0; i< 16; ++i)
+      // HERA_DEBUG << dst[i] << " ";
+    //  void getBits(uint8_t (&buf)[16]) const;
+
+  } catch (EndExecution const&) {
+    // This exception is ignored here because we consider it to be a success.
+    // It is only a clutch for POSIX style exit()
+  }
 
   return result;
 }
